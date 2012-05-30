@@ -11,6 +11,7 @@ Source3: openssh-server.default
 Source4: openssh-server.if-up
 Source5: openssh-server.init
 Source6: sshd_config
+Source1001: packaging/openssh.manifest 
 License: BSD
 Group: Applications/Internet
 BuildRequires: pkgconfig(zlib)
@@ -66,6 +67,7 @@ package installed.
 %setup -q
 
 %build
+cp %{SOURCE1001} .
 
 mkdir -p build-tmp
 cd build-tmp 
@@ -162,6 +164,7 @@ create_keys
 
 
 %files client
+%manifest openssh.manifest
 /etc/ssh/moduli
 /etc/ssh/ssh_config
 %{_bindir}/scp
@@ -173,6 +176,7 @@ create_keys
 
 
 %files server
+%manifest openssh.manifest
 /etc/default/ssh
 /etc/init.d/ssh
 /etc/network/if-up.d/openssh-server
