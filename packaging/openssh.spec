@@ -1,38 +1,37 @@
 #sbs-git:slp/pkgs/o/openssh openssh 5.3p1 6697e2ccd917ab2ce8628f7b246b4bb90c93dd02
-Summary: The OpenSSH implementation of SSH protocol versions 1 and 2
-Name: openssh
-Version: 5.3p1
-Release: 2
-URL: http://www.openssh.com/portable.html
-Source0: openssh-%{version}.tar.gz
-Source1: ssh-argv0
-Source2: ssh-argv0.1
-Source3: openssh-server.default
-Source4: openssh-server.if-up
-Source5: openssh-server.init
-Source6: sshd_config
-Source1001: packaging/openssh.manifest 
-License: BSD
-Group: Applications/Internet
-BuildRequires: pkgconfig(zlib)
-BuildRequireS: pkgconfig(openssl)
-BuildRequireS: pkgconfig(libcrypto)
-
+Name:           openssh
+Version:        5.3p1
+Release:        2
+License:        BSD
+Summary:        The OpenSSH implementation of SSH protocol versions 1 and 2
+Url:            http://www.openssh.com/portable.html
+Group:          Applications/Internet
+Source0:        openssh-%{version}.tar.gz
+Source1:        ssh-argv0
+Source2:        ssh-argv0.1
+Source3:        openssh-server.default
+Source4:        openssh-server.if-up
+Source5:        openssh-server.init
+Source6:        sshd_config
+Source1001:     packaging/openssh.manifest
+BuildRequires:  pkgconfig(libcrypto)
+BuildRequires:  pkgconfig(openssl)
+BuildRequires:  pkgconfig(zlib)
 
 %package client
-Summary: secure shell (SSH) client, for secure access to remote machines
-Group: Applications/Internet
-Requires: openssl >= 0.9.8
-Provides: rsh-client, ssh-client
-
+Summary:        secure shell (SSH) client, for secure access to remote machines
+Group:          Applications/Internet
+Requires:       openssl >= 0.9.8
+Provides:       rsh-client,
+Provides:       ssh-client
 
 %package server
-Summary: secure shell (SSH) server, for secure access from remote machines
-Group: System/Daemons
-Requires: openssh-client = %{version}-%{release}
-Requires: lsb, procps
-Provides: ssh-server
-
+Summary:        secure shell (SSH) server, for secure access from remote machines
+Group:          System/Daemons
+Requires:       lsb,
+Requires:       openssh-client = %{version}
+Requires:       procps
+Provides:       ssh-server
 
 %description
 SSH (Secure SHell) is a program for logging into and executing
@@ -62,7 +61,6 @@ the secure shell daemon (sshd). The sshd daemon allows SSH clients to
 securely connect to your SSH server. You also need to have the openssh
 package installed.
 
-
 %prep
 %setup -q
 
@@ -70,7 +68,7 @@ package installed.
 cp %{SOURCE1001} .
 
 mkdir -p build-tmp
-cd build-tmp 
+cd build-tmp
 
 ../configure \
         --prefix=/usr --sysconfdir=/etc/ssh \
@@ -89,84 +87,40 @@ make -C . -j 2 ASKPASS_PROGRAM='/usr/bin/ssh-askpass'
 
 
 %install
-rm -rf %{buildroot}
 
 make -C build-tmp DESTDIR=%{buildroot} install-nokeys
-rm -f %{buildroot}/etc/ssh/sshd_config
-rm -f %{buildroot}/usr/share/Ssh.bin
+rm -f %{buildroot}%{_sysconfdir}/ssh/sshd_config
+rm -f %{buildroot}%{_datadir}/Ssh.bin
 
-mkdir -p %{buildroot}/etc/init.d
-mkdir -p %{buildroot}/etc/default
-mkdir -p %{buildroot}/etc/network/if-up.d
+mkdir -p %{buildroot}%{_sysconfdir}/init.d
+mkdir -p %{buildroot}%{_sysconfdir}/default
+mkdir -p %{buildroot}%{_sysconfdir}/network/if-up.d
 
-install -m 755 contrib/ssh-copy-id %{buildroot}/usr/bin/ssh-copy-id
-install -m 644 -c contrib/ssh-copy-id.1 %{buildroot}/usr/share/man/man1/ssh-copy-id.1
-install -m 755 %{_sourcedir}/ssh-argv0 %{buildroot}/usr/bin/ssh-argv0
-install -m 644 %{_sourcedir}/ssh-argv0.1 %{buildroot}/usr/share/man/man1/ssh-argv0.1
-install  %{_sourcedir}/openssh-server.init %{buildroot}/etc/init.d/ssh
-install -m 644 %{_sourcedir}/openssh-server.default %{buildroot}/etc/default/ssh
-install  %{_sourcedir}/openssh-server.if-up %{buildroot}/etc/network/if-up.d/openssh-server
+install -m 755 contrib/ssh-copy-id %{buildroot}%{_bindir}/ssh-copy-id
+install -m 644 -c contrib/ssh-copy-id.1 %{buildroot}%{_mandir}/man1/ssh-copy-id.1
+install -m 755 %{_sourcedir}/ssh-argv0 %{buildroot}%{_bindir}/ssh-argv0
+install -m 644 %{_sourcedir}/ssh-argv0.1 %{buildroot}%{_mandir}/man1/ssh-argv0.1
+install  %{_sourcedir}/openssh-server.init %{buildroot}%{_initddir}/ssh
+install -m 644 %{_sourcedir}/openssh-server.default %{buildroot}%{_sysconfdir}/default/ssh
+install  %{_sourcedir}/openssh-server.if-up %{buildroot}%{_sysconfdir}/network/if-up.d/openssh-server
 
 sed -i '/\$$OpenBSD:/d' \
-        %{buildroot}/etc/ssh/moduli \
-        %{buildroot}/etc/ssh/ssh_config
+        %{buildroot}%{_sysconfdir}/ssh/moduli \
+        %{buildroot}%{_sysconfdir}/ssh/ssh_config
 
-mkdir -p %{buildroot}/etc/rc.d/init.d/
-ln -s ../../init.d/ssh %{buildroot}/etc/rc.d/init.d/opensshd
+mkdir -p %{buildroot}%{_sysconfdir}/rc.d/init.d/
+ln -s ../../init.d/ssh %{buildroot}%{_sysconfdir}/rc.d/init.d/opensshd
 
-install -m 600 %{_sourcedir}/sshd_config %{buildroot}/etc/ssh/sshd_config
+install -m 600 %{_sourcedir}/sshd_config %{buildroot}%{_sysconfdir}/ssh/sshd_config
 
 
 %remove_docs
 
-%pre server
-
-%post server
-create_key() {
-        msg="$1"
-        shift
-        hostkeys="$1"
-        shift
-        file="$1"
-        shift
-
-        if echo "$hostkeys" | grep "^$file\$" >/dev/null && \
-           [ ! -f "$file" ] ; then
-                echo -n $msg
-                ssh-keygen -q -f "$file" -N '' "$@"
-                echo
-                if which restorecon >/dev/null 2>&1; then
-                        restorecon "$file.pub"
-                fi
-        fi
-}
-
-
-create_keys() {
-        hostkeys="$(host_keys_required)"
-
-        create_key "Creating SSH1 key; this may take some time ..." \
-                "$hostkeys" /etc/ssh/ssh_host_key -t rsa1
-
-        create_key "Creating SSH2 RSA key; this may take some time ..." \
-                "$hostkeys" /etc/ssh/ssh_host_rsa_key -t rsa
-        create_key "Creating SSH2 DSA key; this may take some time ..." \
-                "$hostkeys" /etc/ssh/ssh_host_dsa_key -t dsa
-}
-
-create_keys
-
-
-%postun server
-
-%preun server
-
-
 
 %files client
 %manifest openssh.manifest
-/etc/ssh/moduli
-/etc/ssh/ssh_config
+%{_sysconfdir}/ssh/moduli
+%{_sysconfdir}/ssh/ssh_config
 %{_bindir}/scp
 %{_bindir}/sftp
 %{_bindir}/slogin
@@ -177,11 +131,11 @@ create_keys
 
 %files server
 %manifest openssh.manifest
-/etc/default/ssh
-/etc/init.d/ssh
-/etc/network/if-up.d/openssh-server
-/etc/rc.d/init.d/opensshd
-/etc/ssh/sshd_config
+%{_sysconfdir}/default/ssh
+%{_sysconfdir}/init.d/ssh
+%{_sysconfdir}/network/if-up.d/openssh-server
+%{_sysconfdir}/rc.d/init.d/opensshd
+%{_sysconfdir}/ssh/sshd_config
 %{_libdir}/openssh/sftp-server
-%{_prefix}/sbin/sshd
+%{_sbindir}/sshd
 
