@@ -100,7 +100,7 @@ install -m 755 contrib/ssh-copy-id %{buildroot}%{_bindir}/ssh-copy-id
 install -m 644 -c contrib/ssh-copy-id.1 %{buildroot}%{_mandir}/man1/ssh-copy-id.1
 install -m 755 %{_sourcedir}/ssh-argv0 %{buildroot}%{_bindir}/ssh-argv0
 install -m 644 %{_sourcedir}/ssh-argv0.1 %{buildroot}%{_mandir}/man1/ssh-argv0.1
-install  %{_sourcedir}/openssh-server.init %{buildroot}%{_initddir}/ssh
+install  %{_sourcedir}/openssh-server.init %{buildroot}%{_sysconfdir}/init.d/ssh
 install -m 644 %{_sourcedir}/openssh-server.default %{buildroot}%{_sysconfdir}/default/ssh
 install  %{_sourcedir}/openssh-server.if-up %{buildroot}%{_sysconfdir}/network/if-up.d/openssh-server
 
