@@ -1,4 +1,4 @@
-/* $OpenBSD: auth1.c,v 1.73 2008/07/04 23:30:16 djm Exp $ */
+/* $OpenBSD: auth1.c,v 1.74 2010/06/25 08:46:17 djm Exp $ */
 /*
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
  *                    All rights reserved
@@ -244,7 +244,7 @@ do_authloop(Authctxt *authctxt)
 	    authctxt->valid ? "" : "invalid user ", authctxt->user);
 
 	/* If the user has no password, accept authentication immediately. */
-	if (options.password_authentication &&
+	if (options.permit_empty_passwd && options.password_authentication &&
 #ifdef KRB5
 	    (!options.kerberos_authentication || options.kerberos_or_local_passwd) &&
 #endif
@@ -383,7 +383,7 @@ void
 do_authentication(Authctxt *authctxt)
 {
 	u_int ulen;
-	char *user, *style = NULL, *role = NULL;
+	char *user, *style = NULL;
 
 	/* Get the name of the user that we wish to log in as. */
 	packet_read_expect(SSH_CMSG_USER);
@@ -392,17 +392,11 @@ do_authentication(Authctxt *authctxt)
 	user = packet_get_string(&ulen);
 	packet_check_eom();
 
-	if ((role = strchr(user, '/')) != NULL)
-		*role++ = '\0';
-
 	if ((style = strchr(user, ':')) != NULL)
-		*style++ = '\0';
-	else if (role && (style = strchr(role, ':')) != NULL)
 		*style++ = '\0';
 
 	authctxt->user = user;
 	authctxt->style = style;
-	authctxt->role = role;
 
 	/* Verify that the user is a valid user. */
 	if ((authctxt->pw = PRIVSEP(getpwnamallow(user))) != NULL)

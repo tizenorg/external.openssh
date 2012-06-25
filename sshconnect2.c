@@ -1,4 +1,4 @@
-/* $OpenBSD: sshconnect2.c,v 1.171 2009/03/05 07:18:19 djm Exp $ */
+/* $OpenBSD: sshconnect2.c,v 1.183 2010/04/26 22:28:24 djm Exp $ */
 /*
  * Copyright (c) 2000 Markus Friedl.  All rights reserved.
  * Copyright (c) 2008 Damien Miller.  All rights reserved.
@@ -32,6 +32,7 @@
 #include <sys/stat.h>
 
 #include <errno.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <pwd.h>
 #include <signal.h>
@@ -105,33 +106,8 @@ ssh_kex2(char *host, struct sockaddr *hostaddr)
 {
 	Kex *kex;
 
-#ifdef GSSAPI
-	char *orig = NULL, *gss = NULL;
-	char *gss_host = NULL;
-#endif
-
 	xxx_host = host;
 	xxx_hostaddr = hostaddr;
-
-#ifdef GSSAPI
-	if (options.gss_keyex) {
-		/* Add the GSSAPI mechanisms currently supported on this 
-		 * client to the key exchange algorithm proposal */
-		orig = myproposal[PROPOSAL_KEX_ALGS];
-
-		if (options.gss_trust_dns)
-			gss_host = (char *)get_canonical_hostname(1);
-		else
-			gss_host = host;
-
-		gss = ssh_gssapi_client_mechanisms(gss_host, options.gss_client_identity);
-		if (gss) {
-			debug("Offering GSSAPI proposal: %s", gss);
-			xasprintf(&myproposal[PROPOSAL_KEX_ALGS],
-			    "%s,%s", gss, orig);
-		}
-	}
-#endif
 
 	if (options.ciphers == (char *)-1) {
 		logit("No valid ciphers for protocol version 2 given, using defaults.");
@@ -160,17 +136,6 @@ ssh_kex2(char *host, struct sockaddr *hostaddr)
 		myproposal[PROPOSAL_SERVER_HOST_KEY_ALGS] =
 		    options.hostkeyalgorithms;
 
-#ifdef GSSAPI
-	/* If we've got GSSAPI algorithms, then we also support the
-	 * 'null' hostkey, as a last resort */
-	if (options.gss_keyex && gss) {
-		orig = myproposal[PROPOSAL_SERVER_HOST_KEY_ALGS];
-		xasprintf(&myproposal[PROPOSAL_SERVER_HOST_KEY_ALGS], 
-		    "%s,null", orig);
-		xfree(gss);
-	}
-#endif
-
 	if (options.rekey_limit)
 		packet_set_rekey_limit((u_int32_t)options.rekey_limit);
 
@@ -180,29 +145,18 @@ ssh_kex2(char *host, struct sockaddr *hostaddr)
 	kex->kex[KEX_DH_GRP14_SHA1] = kexdh_client;
 	kex->kex[KEX_DH_GEX_SHA1] = kexgex_client;
 	kex->kex[KEX_DH_GEX_SHA256] = kexgex_client;
-#ifdef GSSAPI
-	if (options.gss_keyex) {
-		kex->kex[KEX_GSS_GRP1_SHA1] = kexgss_client;
-		kex->kex[KEX_GSS_GRP14_SHA1] = kexgss_client;
-		kex->kex[KEX_GSS_GEX_SHA1] = kexgss_client;
-	}
-#endif
 	kex->client_version_string=client_version_string;
 	kex->server_version_string=server_version_string;
 	kex->verify_host_key=&verify_host_key_callback;
 
-#ifdef GSSAPI
-	if (options.gss_keyex) {
-		kex->gss_deleg_creds = options.gss_deleg_creds;
-		kex->gss_trust_dns = options.gss_trust_dns;
-		kex->gss_client = options.gss_client_identity;
-		kex->gss_host = gss_host;
-	}
-#endif
-
 	xxx_kex = kex;
 
 	dispatch_run(DISPATCH_BLOCK, &kex->done, kex);
+
+	if (options.use_roaming && !kex->roaming) {
+		debug("Roaming not allowed by server");
+		options.use_roaming = 0;
+	}
 
 	session_id2 = kex->session_id;
 	session_id2_len = kex->session_id_len;
@@ -241,7 +195,7 @@ struct Authctxt {
 	const char *host;
 	const char *service;
 	Authmethod *method;
-	int success;
+	sig_atomic_t success;
 	char *authlist;
 	/* pubkey */
 	Idlist keys;
@@ -262,6 +216,7 @@ struct Authmethod {
 };
 
 void	input_userauth_success(int, u_int32_t, void *);
+void	input_userauth_success_unexpected(int, u_int32_t, void *);
 void	input_userauth_failure(int, u_int32_t, void *);
 void	input_userauth_banner(int, u_int32_t, void *);
 void	input_userauth_error(int, u_int32_t, void *);
@@ -288,7 +243,6 @@ void	input_gssapi_token(int type, u_int32_t, void *);
 void	input_gssapi_hash(int type, u_int32_t, void *);
 void	input_gssapi_error(int, u_int32_t, void *);
 void	input_gssapi_errtok(int, u_int32_t, void *);
-int	userauth_gsskeyex(Authctxt *authctxt);
 #endif
 
 void	userauth(Authctxt *, char *);
@@ -304,17 +258,7 @@ static char *authmethods_get(void);
 
 Authmethod authmethods[] = {
 #ifdef GSSAPI
-	{"gssapi-keyex",
-		userauth_gsskeyex,
-		NULL,
-		&options.gss_authentication,
-		NULL},
 	{"gssapi-with-mic",
-		userauth_gssapi,
-		NULL,
-		&options.gss_authentication,
-		NULL},
-	{"gssapi",
 		userauth_gssapi,
 		NULL,
 		&options.gss_authentication,
@@ -490,17 +434,32 @@ void
 input_userauth_success(int type, u_int32_t seq, void *ctxt)
 {
 	Authctxt *authctxt = ctxt;
+
 	if (authctxt == NULL)
 		fatal("input_userauth_success: no authentication context");
 	if (authctxt->authlist) {
 		xfree(authctxt->authlist);
 		authctxt->authlist = NULL;
 	}
+	if (authctxt->method != NULL && authctxt->method->cleanup != NULL)
+		authctxt->method->cleanup(authctxt);
 	if (authctxt->methoddata) {
 		xfree(authctxt->methoddata);
 		authctxt->methoddata = NULL;
 	}
 	authctxt->success = 1;			/* break out */
+}
+
+void
+input_userauth_success_unexpected(int type, u_int32_t seq, void *ctxt)
+{
+	Authctxt *authctxt = ctxt;
+
+	if (authctxt == NULL)
+		fatal("%s: no authentication context", __func__);
+
+	fatal("Unexpected authentication success during %s.",
+	    authctxt->method->name);
 }
 
 /* ARGSUSED */
@@ -605,30 +564,19 @@ userauth_gssapi(Authctxt *authctxt)
 	static u_int mech = 0;
 	OM_uint32 min;
 	int ok = 0;
-	const char *gss_host;
-	int old_gssapi_method;
-
-	if (options.gss_trust_dns)
-		gss_host = get_canonical_hostname(1);
-	else
-		gss_host = authctxt->host;
 
 	/* Try one GSSAPI method at a time, rather than sending them all at
 	 * once. */
 
 	if (gss_supported == NULL)
-		if (GSS_ERROR(gss_indicate_mechs(&min, &gss_supported))) {
-			gss_supported = NULL;
-			return 0;
-		}
+		gss_indicate_mechs(&min, &gss_supported);
 
 	/* Check to see if the mechanism is usable before we offer it */
 	while (mech < gss_supported->count && !ok) {
 		/* My DER encoding requires length<128 */
 		if (gss_supported->elements[mech].length < 128 &&
 		    ssh_gssapi_check_mechanism(&gssctxt, 
-		    &gss_supported->elements[mech], gss_host, 
-                    options.gss_client_identity)) {
+		    &gss_supported->elements[mech], authctxt->host)) {
 			ok = 1; /* Mechanism works */
 		} else {
 			mech++;
@@ -645,25 +593,13 @@ userauth_gssapi(Authctxt *authctxt)
 	packet_put_cstring(authctxt->service);
 	packet_put_cstring(authctxt->method->name);
 
-	old_gssapi_method = !strcmp(authctxt->method->name, "gssapi");
-
-	/* Versions of Debian ssh-krb5 prior to 3.8.1p1-1 don't expect
-	 * tagged OIDs.  As such we include both tagged and untagged oids
-	 * for the old gssapi method.
-	 * We only include tagged oids for the new gssapi-with-mic method.
-	 */
-	packet_put_int(old_gssapi_method ? 2 : 1);
+	packet_put_int(1);
 
 	packet_put_int((gss_supported->elements[mech].length) + 2);
 	packet_put_char(SSH_GSS_OIDTYPE);
 	packet_put_char(gss_supported->elements[mech].length);
 	packet_put_raw(gss_supported->elements[mech].elements,
 	    gss_supported->elements[mech].length);
-	if (old_gssapi_method) {
-		packet_put_int(gss_supported->elements[mech].length);
-		packet_put_raw(gss_supported->elements[mech].elements,
-			       gss_supported->elements[mech].length);
-	}
 
 	packet_send();
 
@@ -703,10 +639,8 @@ process_gssapi_token(void *ctxt, gss_buffer_t recv_tok)
 	}
 
 	if (status == GSS_S_COMPLETE) {
-		int old_gssapi_method = !strcmp(authctxt->method->name,
-						"gssapi");
 		/* send either complete or MIC, depending on mechanism */
-		if (old_gssapi_method || !(flags & GSS_C_INTEG_FLAG)) {
+		if (!(flags & GSS_C_INTEG_FLAG)) {
 			packet_start(SSH2_MSG_USERAUTH_GSSAPI_EXCHANGE_COMPLETE);
 			packet_send();
 		} else {
@@ -739,8 +673,8 @@ input_gssapi_response(int type, u_int32_t plen, void *ctxt)
 {
 	Authctxt *authctxt = ctxt;
 	Gssctxt *gssctxt;
-	u_int oidlen;
-	u_char *oidv, *oidv_free;
+	int oidlen;
+	char *oidv;
 
 	if (authctxt == NULL)
 		fatal("input_gssapi_response: no authentication context");
@@ -748,28 +682,22 @@ input_gssapi_response(int type, u_int32_t plen, void *ctxt)
 
 	/* Setup our OID */
 	oidv = packet_get_string(&oidlen);
-	oidv_free = oidv;
 
 	if (oidlen <= 2 ||
 	    oidv[0] != SSH_GSS_OIDTYPE ||
 	    oidv[1] != oidlen - 2) {
+		xfree(oidv);
 		debug("Badly encoded mechanism OID received");
-		if (oidlen < 2) {
-			xfree(oidv_free);
-			userauth(authctxt, NULL);
-			return;
-		}
-	} else {
-		oidlen -= 2;
-		oidv += 2;
+		userauth(authctxt, NULL);
+		return;
 	}
 
-	if (!ssh_gssapi_check_oid(gssctxt, oidv, oidlen))
+	if (!ssh_gssapi_check_oid(gssctxt, oidv + 2, oidlen - 2))
 		fatal("Server returned different OID than expected");
 
 	packet_check_eom();
 
-	xfree(oidv_free);
+	xfree(oidv);
 
 	if (GSS_ERROR(process_gssapi_token(ctxt, GSS_C_NO_BUFFER))) {
 		/* Start again with next method on list */
@@ -856,48 +784,6 @@ input_gssapi_error(int type, u_int32_t plen, void *ctxt)
 	xfree(msg);
 	xfree(lang);
 }
-
-int
-userauth_gsskeyex(Authctxt *authctxt)
-{
-	Buffer b;
-	gss_buffer_desc gssbuf;
-	gss_buffer_desc mic = GSS_C_EMPTY_BUFFER;
-	OM_uint32 ms;
-
-	static int attempt = 0;
-	if (attempt++ >= 1)
-		return (0);
-
-	if (gss_kex_context == NULL) {
-		debug("No valid Key exchange context"); 
-		return (0);
-	}
-
-	ssh_gssapi_buildmic(&b, authctxt->server_user, authctxt->service,
-	    "gssapi-keyex");
-
-	gssbuf.value = buffer_ptr(&b);
-	gssbuf.length = buffer_len(&b);
-
-	if (GSS_ERROR(ssh_gssapi_sign(gss_kex_context, &gssbuf, &mic))) {
-		buffer_free(&b);
-		return (0);
-	}
-
-	packet_start(SSH2_MSG_USERAUTH_REQUEST);
-	packet_put_cstring(authctxt->server_user);
-	packet_put_cstring(authctxt->service);
-	packet_put_cstring(authctxt->method->name);
-	packet_put_string(mic.value, mic.length);
-	packet_send();
-
-	buffer_free(&b);
-	gss_release_buffer(&ms, &mic);
-
-	return (1);
-}
-
 #endif /* GSSAPI */
 
 int
@@ -918,6 +804,8 @@ userauth_passwd(Authctxt *authctxt)
 	static int attempt = 0;
 	char prompt[150];
 	char *password;
+	const char *host = options.host_key_alias ?  options.host_key_alias :
+	    authctxt->host;
 
 	if (attempt++ >= options.number_of_password_prompts)
 		return 0;
@@ -926,7 +814,7 @@ userauth_passwd(Authctxt *authctxt)
 		error("Permission denied, please try again.");
 
 	snprintf(prompt, sizeof(prompt), "%.30s@%.128s's password: ",
-	    authctxt->server_user, authctxt->host);
+	    authctxt->server_user, host);
 	password = read_passphrase(prompt, 0);
 	packet_start(SSH2_MSG_USERAUTH_REQUEST);
 	packet_put_cstring(authctxt->server_user);
@@ -955,6 +843,8 @@ input_userauth_passwd_changereq(int type, u_int32_t seqnr, void *ctxt)
 	Authctxt *authctxt = ctxt;
 	char *info, *lang, *password = NULL, *retype = NULL;
 	char prompt[150];
+	const char *host = options.host_key_alias ? options.host_key_alias :
+	    authctxt->host;
 
 	debug2("input_userauth_passwd_changereq");
 
@@ -975,7 +865,7 @@ input_userauth_passwd_changereq(int type, u_int32_t seqnr, void *ctxt)
 	packet_put_char(1);			/* additional info */
 	snprintf(prompt, sizeof(prompt),
 	    "Enter %.30s@%.128s's old password: ",
-	    authctxt->server_user, authctxt->host);
+	    authctxt->server_user, host);
 	password = read_passphrase(prompt, 0);
 	packet_put_cstring(password);
 	memset(password, 0, strlen(password));
@@ -984,7 +874,7 @@ input_userauth_passwd_changereq(int type, u_int32_t seqnr, void *ctxt)
 	while (password == NULL) {
 		snprintf(prompt, sizeof(prompt),
 		    "Enter %.30s@%.128s's new password: ",
-		    authctxt->server_user, authctxt->host);
+		    authctxt->server_user, host);
 		password = read_passphrase(prompt, RP_ALLOW_EOF);
 		if (password == NULL) {
 			/* bail out */
@@ -992,7 +882,7 @@ input_userauth_passwd_changereq(int type, u_int32_t seqnr, void *ctxt)
 		}
 		snprintf(prompt, sizeof(prompt),
 		    "Retype %.30s@%.128s's new password: ",
-		    authctxt->server_user, authctxt->host);
+		    authctxt->server_user, host);
 		retype = read_passphrase(prompt, 0);
 		if (strcmp(password, retype) != 0) {
 			memset(password, 0, strlen(password));
@@ -1250,8 +1140,11 @@ sign_and_send_pubkey(Authctxt *authctxt, Identity *id)
 	u_int skip = 0;
 	int ret = -1;
 	int have_sig = 1;
+	char *fp;
 
-	debug3("sign_and_send_pubkey");
+	fp = key_fingerprint(id->key, SSH_FP_MD5, SSH_FP_HEX);
+	debug3("sign_and_send_pubkey: %s %s", key_type(id->key), fp);
+	xfree(fp);
 
 	if (key_to_blob(id->key, &blob, &bloblen) == 0) {
 		/* we cannot handle this key */
@@ -1360,7 +1253,7 @@ load_identity_file(char *filename)
 {
 	Key *private;
 	char prompt[300], *passphrase;
-	int perm_ok, quit, i;
+	int perm_ok = 0, quit, i;
 	struct stat st;
 
 	if (stat(filename, &st) < 0) {
@@ -1418,10 +1311,10 @@ pubkey_prepare(Authctxt *authctxt)
 
 	/* list of keys stored in the filesystem */
 	for (i = 0; i < options.num_identity_files; i++) {
-		if (options.identity_files[i] == NULL)
-			continue;
 		key = options.identity_keys[i];
 		if (key && key->type == KEY_RSA1)
+			continue;
+		if (key && key->cert && key->cert->type != SSH2_CERT_TYPE_USER)
 			continue;
 		options.identity_keys[i] = NULL;
 		id = xcalloc(1, sizeof(*id));
@@ -1508,9 +1401,10 @@ userauth_pubkey(Authctxt *authctxt)
 		 * private key instead
 		 */
 		if (id->key && id->key->type != KEY_RSA1) {
-			debug("Offering public key: %s", id->filename);
+			debug("Offering %s public key: %s", key_type(id->key),
+			    id->filename);
 			sent = send_pubkey_test(authctxt, id);
-		} else if (id->key == NULL && id->filename) {
+		} else if (id->key == NULL) {
 			debug("Trying private key: %s", id->filename);
 			id->key = load_identity_file(id->filename);
 			if (id->key != NULL) {
@@ -1626,7 +1520,7 @@ ssh_keysign(Key *key, u_char **sigp, u_int *lenp,
 	debug2("ssh_keysign called");
 
 	if (stat(_PATH_SSH_KEY_SIGN, &st) < 0) {
-		error("ssh_keysign: no installed: %s", strerror(errno));
+		error("ssh_keysign: not installed: %s", strerror(errno));
 		return -1;
 	}
 	if (fflush(stdout) != 0)
@@ -1644,6 +1538,8 @@ ssh_keysign(Key *key, u_char **sigp, u_int *lenp,
 		return -1;
 	}
 	if (pid == 0) {
+		/* keep the socket on exec */
+		fcntl(packet_get_connection_in(), F_SETFD, 0);
 		permanently_drop_suid(getuid());
 		close(from[0]);
 		if (dup2(from[1], STDOUT_FILENO) < 0)
@@ -1696,10 +1592,10 @@ userauth_hostbased(Authctxt *authctxt)
 	Sensitive *sensitive = authctxt->sensitive;
 	Buffer b;
 	u_char *signature, *blob;
-	char *chost, *pkalg, *p, myname[NI_MAXHOST];
+	char *chost, *pkalg, *p;
 	const char *service;
 	u_int blen, slen;
-	int ok, i, len, found = 0;
+	int ok, i, found = 0;
 
 	/* check for a useful key */
 	for (i = 0; i < sensitive->nkeys; i++) {
@@ -1720,23 +1616,13 @@ userauth_hostbased(Authctxt *authctxt)
 		return 0;
 	}
 	/* figure out a name for the client host */
-	p = NULL;
-	if (packet_connection_is_on_socket())
-		p = get_local_name(packet_get_connection_in());
-	if (p == NULL) {
-		if (gethostname(myname, sizeof(myname)) == -1) {
-			verbose("userauth_hostbased: gethostname: %s", 
-			    strerror(errno));
-		} else
-			p = xstrdup(myname);
-	}
+	p = get_local_name(packet_get_connection_in());
 	if (p == NULL) {
 		error("userauth_hostbased: cannot get local ipaddr/name");
 		key_free(private);
 		xfree(blob);
 		return 0;
 	}
-	len = strlen(p) + 2;
 	xasprintf(&chost, "%s.", p);
 	debug2("userauth_hostbased: chost %s", chost);
 	xfree(p);
@@ -1847,6 +1733,8 @@ userauth_jpake(Authctxt *authctxt)
 	/* Expect step 1 packet from peer */
 	dispatch_set(SSH2_MSG_USERAUTH_JPAKE_SERVER_STEP1,
 	    input_userauth_jpake_server_step1);
+	dispatch_set(SSH2_MSG_USERAUTH_SUCCESS,
+	    &input_userauth_success_unexpected);
 
 	return 1;
 }
@@ -1859,6 +1747,7 @@ userauth_jpake_cleanup(Authctxt *authctxt)
 		jpake_free(authctxt->methoddata);
 		authctxt->methoddata = NULL;
 	}
+	dispatch_set(SSH2_MSG_USERAUTH_SUCCESS, &input_userauth_success);
 }
 #endif /* JPAKE */
 

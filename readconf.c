@@ -1,4 +1,4 @@
-/* $OpenBSD: readconf.c,v 1.177 2009/06/27 09:35:06 andreas Exp $ */
+/* $OpenBSD: readconf.c,v 1.187 2010/07/19 09:15:12 djm Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -28,8 +28,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
-#include <pwd.h>
-#include <grp.h>
 
 #include "xmalloc.h"
 #include "ssh.h"
@@ -112,8 +110,8 @@
 
 typedef enum {
 	oBadOption,
-	oForwardAgent, oForwardX11, oForwardX11Trusted, oGatewayPorts,
-	oExitOnForwardFailure,
+	oForwardAgent, oForwardX11, oForwardX11Trusted, oForwardX11Timeout,
+	oGatewayPorts, oExitOnForwardFailure,
 	oPasswordAuthentication, oRSAAuthentication,
 	oChallengeResponseAuthentication, oXAuthLocation,
 	oIdentityFile, oHostName, oPort, oCipher, oRemoteForward, oLocalForward,
@@ -125,17 +123,15 @@ typedef enum {
 	oGlobalKnownHostsFile2, oUserKnownHostsFile2, oPubkeyAuthentication,
 	oKbdInteractiveAuthentication, oKbdInteractiveDevices, oHostKeyAlias,
 	oDynamicForward, oPreferredAuthentications, oHostbasedAuthentication,
-	oUseBlacklistedKeys,
-	oHostKeyAlgorithms, oBindAddress, oSmartcardDevice,
+	oHostKeyAlgorithms, oBindAddress, oPKCS11Provider,
 	oClearAllForwardings, oNoHostAuthenticationForLocalhost,
 	oEnableSSHKeysign, oRekeyLimit, oVerifyHostKeyDNS, oConnectTimeout,
 	oAddressFamily, oGssAuthentication, oGssDelegateCreds,
-	oGssTrustDns, oGssKeyEx, oGssClientIdentity, oGssRenewalRekey,
 	oServerAliveInterval, oServerAliveCountMax, oIdentitiesOnly,
-	oSendEnv, oControlPath, oControlMaster, oHashKnownHosts,
+	oSendEnv, oControlPath, oControlMaster, oControlPersist,
+	oHashKnownHosts,
 	oTunnel, oTunnelDevice, oLocalCommand, oPermitLocalCommand,
 	oVisualHostKey, oUseRoaming, oZeroKnowledgePasswordAuthentication,
-	oProtocolKeepAlives, oSetupTimeOut,
 	oDeprecated, oUnsupported
 } OpCodes;
 
@@ -148,6 +144,7 @@ static struct {
 	{ "forwardagent", oForwardAgent },
 	{ "forwardx11", oForwardX11 },
 	{ "forwardx11trusted", oForwardX11Trusted },
+	{ "forwardx11timeout", oForwardX11Timeout },
 	{ "exitonforwardfailure", oExitOnForwardFailure },
 	{ "xauthlocation", oXAuthLocation },
 	{ "gatewayports", oGatewayPorts },
@@ -156,7 +153,6 @@ static struct {
 	{ "passwordauthentication", oPasswordAuthentication },
 	{ "kbdinteractiveauthentication", oKbdInteractiveAuthentication },
 	{ "kbdinteractivedevices", oKbdInteractiveDevices },
-	{ "useblacklistedkeys", oUseBlacklistedKeys },
 	{ "rsaauthentication", oRSAAuthentication },
 	{ "pubkeyauthentication", oPubkeyAuthentication },
 	{ "dsaauthentication", oPubkeyAuthentication },		    /* alias */
@@ -170,18 +166,10 @@ static struct {
 	{ "afstokenpassing", oUnsupported },
 #if defined(GSSAPI)
 	{ "gssapiauthentication", oGssAuthentication },
-	{ "gssapikeyexchange", oGssKeyEx },
 	{ "gssapidelegatecredentials", oGssDelegateCreds },
-	{ "gssapitrustdns", oGssTrustDns },
-	{ "gssapiclientidentity", oGssClientIdentity },
-	{ "gssapirenewalforcesrekey", oGssRenewalRekey },
 #else
 	{ "gssapiauthentication", oUnsupported },
-	{ "gssapikeyexchange", oUnsupported },
 	{ "gssapidelegatecredentials", oUnsupported },
-	{ "gssapitrustdns", oUnsupported },
-	{ "gssapiclientidentity", oUnsupported },
-	{ "gssapirenewalforcesrekey", oUnsupported },
 #endif
 	{ "fallbacktorsh", oDeprecated },
 	{ "usersh", oDeprecated },
@@ -219,10 +207,12 @@ static struct {
 	{ "preferredauthentications", oPreferredAuthentications },
 	{ "hostkeyalgorithms", oHostKeyAlgorithms },
 	{ "bindaddress", oBindAddress },
-#ifdef SMARTCARD
-	{ "smartcarddevice", oSmartcardDevice },
+#ifdef ENABLE_PKCS11
+	{ "smartcarddevice", oPKCS11Provider },
+	{ "pkcs11provider", oPKCS11Provider },
 #else
 	{ "smartcarddevice", oUnsupported },
+	{ "pkcs11provider", oUnsupported },
 #endif
 	{ "clearallforwardings", oClearAllForwardings },
 	{ "enablesshkeysign", oEnableSSHKeysign },
@@ -236,6 +226,7 @@ static struct {
 	{ "sendenv", oSendEnv },
 	{ "controlpath", oControlPath },
 	{ "controlmaster", oControlMaster },
+	{ "controlpersist", oControlPersist },
 	{ "hashknownhosts", oHashKnownHosts },
 	{ "tunnel", oTunnel },
 	{ "tunneldevice", oTunnelDevice },
@@ -249,8 +240,6 @@ static struct {
 #else
 	{ "zeroknowledgepasswordauthentication", oUnsupported },
 #endif
-	{ "protocolkeepalives", oProtocolKeepAlives },
-	{ "setuptimeout", oSetupTimeOut },
 
 	{ NULL, oBadOption }
 };
@@ -269,8 +258,9 @@ add_local_forward(Options *options, const Forward *newfwd)
 	if (newfwd->listen_port < IPPORT_RESERVED && original_real_uid != 0)
 		fatal("Privileged ports can only be forwarded by root.");
 #endif
-	if (options->num_local_forwards >= SSH_MAX_FORWARDS_PER_DIRECTION)
-		fatal("Too many local forwards (max %d).", SSH_MAX_FORWARDS_PER_DIRECTION);
+	options->local_forwards = xrealloc(options->local_forwards,
+	    options->num_local_forwards + 1,
+	    sizeof(*options->local_forwards));
 	fwd = &options->local_forwards[options->num_local_forwards++];
 
 	fwd->listen_host = newfwd->listen_host;
@@ -288,15 +278,17 @@ void
 add_remote_forward(Options *options, const Forward *newfwd)
 {
 	Forward *fwd;
-	if (options->num_remote_forwards >= SSH_MAX_FORWARDS_PER_DIRECTION)
-		fatal("Too many remote forwards (max %d).",
-		    SSH_MAX_FORWARDS_PER_DIRECTION);
+
+	options->remote_forwards = xrealloc(options->remote_forwards,
+	    options->num_remote_forwards + 1,
+	    sizeof(*options->remote_forwards));
 	fwd = &options->remote_forwards[options->num_remote_forwards++];
 
 	fwd->listen_host = newfwd->listen_host;
 	fwd->listen_port = newfwd->listen_port;
 	fwd->connect_host = newfwd->connect_host;
 	fwd->connect_port = newfwd->connect_port;
+	fwd->allocated_port = 0;
 }
 
 static void
@@ -309,11 +301,19 @@ clear_forwardings(Options *options)
 			xfree(options->local_forwards[i].listen_host);
 		xfree(options->local_forwards[i].connect_host);
 	}
+	if (options->num_local_forwards > 0) {
+		xfree(options->local_forwards);
+		options->local_forwards = NULL;
+	}
 	options->num_local_forwards = 0;
 	for (i = 0; i < options->num_remote_forwards; i++) {
 		if (options->remote_forwards[i].listen_host != NULL)
 			xfree(options->remote_forwards[i].listen_host);
 		xfree(options->remote_forwards[i].connect_host);
+	}
+	if (options->num_remote_forwards > 0) {
+		xfree(options->remote_forwards);
+		options->remote_forwards = NULL;
 	}
 	options->num_remote_forwards = 0;
 	options->tun_open = SSH_TUNMODE_NO;
@@ -417,6 +417,10 @@ parse_flag:
 	case oForwardX11Trusted:
 		intptr = &options->forward_x11_trusted;
 		goto parse_flag;
+	
+	case oForwardX11Timeout:
+		intptr = &options->forward_x11_timeout;
+		goto parse_time;
 
 	case oGatewayPorts:
 		intptr = &options->gateway_ports;
@@ -466,32 +470,12 @@ parse_flag:
 		intptr = &options->challenge_response_authentication;
 		goto parse_flag;
 
-	case oUseBlacklistedKeys:
-		intptr = &options->use_blacklisted_keys;
-		goto parse_flag;
-
 	case oGssAuthentication:
 		intptr = &options->gss_authentication;
 		goto parse_flag;
 
-	case oGssKeyEx:
-		intptr = &options->gss_keyex;
-		goto parse_flag;
-
 	case oGssDelegateCreds:
 		intptr = &options->gss_deleg_creds;
-		goto parse_flag;
-
-	case oGssTrustDns:
-		intptr = &options->gss_trust_dns;
-		goto parse_flag;
-
-	case oGssClientIdentity:
-		charptr = &options->gss_client_identity;
-		goto parse_string;
-
-	case oGssRenewalRekey:
-		intptr = &options->gss_renewal_rekey;
 		goto parse_flag;
 
 	case oBatchMode:
@@ -645,8 +629,8 @@ parse_string:
 		charptr = &options->bind_address;
 		goto parse_string;
 
-	case oSmartcardDevice:
-		charptr = &options->smartcard_device;
+	case oPKCS11Provider:
+		charptr = &options->pkcs11_provider;
 		goto parse_string;
 
 	case oProxyCommand:
@@ -850,8 +834,6 @@ parse_int:
 		goto parse_flag;
 
 	case oServerAliveInterval:
-	case oProtocolKeepAlives: /* Debian-specific compatibility alias */
-	case oSetupTimeOut:	  /* Debian-specific compatibility alias */
 		intptr = &options->server_alive_interval;
 		goto parse_time;
 
@@ -900,6 +882,30 @@ parse_int:
 			    filename, linenum);
 		if (*activep && *intptr == -1)
 			*intptr = value;
+		break;
+
+	case oControlPersist:
+		/* no/false/yes/true, or a time spec */
+		intptr = &options->control_persist;
+		arg = strdelim(&s);
+		if (!arg || *arg == '\0')
+			fatal("%.200s line %d: Missing ControlPersist"
+			    " argument.", filename, linenum);
+		value = 0;
+		value2 = 0;	/* timeout */
+		if (strcmp(arg, "no") == 0 || strcmp(arg, "false") == 0)
+			value = 0;
+		else if (strcmp(arg, "yes") == 0 || strcmp(arg, "true") == 0)
+			value = 1;
+		else if ((value2 = convtime(arg)) >= 0)
+			value = 1;
+		else
+			fatal("%.200s line %d: Bad ControlPersist argument.",
+			    filename, linenum);
+		if (*activep && *intptr == -1) {
+			*intptr = value;
+			options->control_persist_timeout = value2;
+		}
 		break;
 
 	case oHashKnownHosts:
@@ -1000,30 +1006,11 @@ read_config_file(const char *filename, const char *host, Options *options,
 
 	if (checkperm) {
 		struct stat sb;
-		int bad_modes = 0;
 
 		if (fstat(fileno(f), &sb) == -1)
 			fatal("fstat %s: %s", filename, strerror(errno));
-		if (sb.st_uid != 0 && sb.st_uid != getuid())
-			bad_modes = 1;
-		if ((sb.st_mode & 020) != 0) {
-			/* If the file is group-writable, the group in
-			 * question must have at most one member, namely the
-			 * file's owner.
-			 */
-			struct passwd *pw = getpwuid(sb.st_uid);
-			struct group *gr = getgrgid(sb.st_gid);
-			if (!pw || !gr)
-				bad_modes = 1;
-			else if (gr->gr_mem[0]) {
-				if (strcmp(pw->pw_name, gr->gr_mem[0]) ||
-				    gr->gr_mem[1])
-					bad_modes = 1;
-			}
-		}
-		if ((sb.st_mode & 002) != 0)
-			bad_modes = 1;
-		if (bad_modes)
+		if (((sb.st_uid != 0 && sb.st_uid != getuid()) ||
+		    (sb.st_mode & 022) != 0))
 			fatal("Bad owner or permissions on %s", filename);
 	}
 
@@ -1062,6 +1049,7 @@ initialize_options(Options * options)
 	options->forward_agent = -1;
 	options->forward_x11 = -1;
 	options->forward_x11_trusted = -1;
+	options->forward_x11_timeout = -1;
 	options->exit_on_forward_failure = -1;
 	options->xauth_location = NULL;
 	options->gateway_ports = -1;
@@ -1070,17 +1058,12 @@ initialize_options(Options * options)
 	options->pubkey_authentication = -1;
 	options->challenge_response_authentication = -1;
 	options->gss_authentication = -1;
-	options->gss_keyex = -1;
 	options->gss_deleg_creds = -1;
-	options->gss_trust_dns = -1;
-	options->gss_renewal_rekey = -1;
-	options->gss_client_identity = NULL;
 	options->password_authentication = -1;
 	options->kbd_interactive_authentication = -1;
 	options->kbd_interactive_devices = NULL;
 	options->rhosts_rsa_authentication = -1;
 	options->hostbased_authentication = -1;
-	options->use_blacklisted_keys = -1;
 	options->batch_mode = -1;
 	options->check_host_ip = -1;
 	options->strict_host_key_checking = -1;
@@ -1107,13 +1090,15 @@ initialize_options(Options * options)
 	options->user_hostfile = NULL;
 	options->system_hostfile2 = NULL;
 	options->user_hostfile2 = NULL;
+	options->local_forwards = NULL;
 	options->num_local_forwards = 0;
+	options->remote_forwards = NULL;
 	options->num_remote_forwards = 0;
 	options->clear_forwardings = -1;
 	options->log_level = SYSLOG_LEVEL_NOT_SET;
 	options->preferred_authentications = NULL;
 	options->bind_address = NULL;
-	options->smartcard_device = NULL;
+	options->pkcs11_provider = NULL;
 	options->enable_ssh_keysign = - 1;
 	options->no_host_authentication_for_localhost = - 1;
 	options->identities_only = - 1;
@@ -1124,6 +1109,8 @@ initialize_options(Options * options)
 	options->num_send_env = 0;
 	options->control_path = NULL;
 	options->control_master = -1;
+	options->control_persist = -1;
+	options->control_persist_timeout = 0;
 	options->hash_known_hosts = -1;
 	options->tun_open = -1;
 	options->tun_local = -1;
@@ -1150,7 +1137,9 @@ fill_default_options(Options * options)
 	if (options->forward_x11 == -1)
 		options->forward_x11 = 0;
 	if (options->forward_x11_trusted == -1)
-		options->forward_x11_trusted = 1;
+		options->forward_x11_trusted = 0;
+	if (options->forward_x11_timeout == -1)
+		options->forward_x11_timeout = 1200;
 	if (options->exit_on_forward_failure == -1)
 		options->exit_on_forward_failure = 0;
 	if (options->xauth_location == NULL)
@@ -1167,14 +1156,8 @@ fill_default_options(Options * options)
 		options->challenge_response_authentication = 1;
 	if (options->gss_authentication == -1)
 		options->gss_authentication = 0;
-	if (options->gss_keyex == -1)
-		options->gss_keyex = 0;
 	if (options->gss_deleg_creds == -1)
 		options->gss_deleg_creds = 0;
-	if (options->gss_trust_dns == -1)
-		options->gss_trust_dns = 0;
-	if (options->gss_renewal_rekey == -1)
-		options->gss_renewal_rekey = 0;
 	if (options->password_authentication == -1)
 		options->password_authentication = 1;
 	if (options->kbd_interactive_authentication == -1)
@@ -1183,8 +1166,6 @@ fill_default_options(Options * options)
 		options->rhosts_rsa_authentication = 0;
 	if (options->hostbased_authentication == -1)
 		options->hostbased_authentication = 0;
-	if (options->use_blacklisted_keys == -1)
-		options->use_blacklisted_keys = 0;
 	if (options->batch_mode == -1)
 		options->batch_mode = 0;
 	if (options->check_host_ip == -1)
@@ -1212,7 +1193,7 @@ fill_default_options(Options * options)
 	/* options->macs, default set in myproposals.h */
 	/* options->hostkeyalgorithms, default set in myproposals.h */
 	if (options->protocol == SSH_PROTO_UNKNOWN)
-		options->protocol = SSH_PROTO_1|SSH_PROTO_2;
+		options->protocol = SSH_PROTO_2;
 	if (options->num_identity_files == 0) {
 		if (options->protocol & SSH_PROTO_1) {
 			len = 2 + strlen(_PATH_SSH_CLIENT_IDENTITY) + 1;
@@ -1259,17 +1240,16 @@ fill_default_options(Options * options)
 		options->rekey_limit = 0;
 	if (options->verify_host_key_dns == -1)
 		options->verify_host_key_dns = 0;
-	if (options->server_alive_interval == -1) {
-		/* in batch mode, default is 5mins */
-		if (options->batch_mode == 1)
-			options->server_alive_interval = 300;
-		else
-			options->server_alive_interval = 0;
-	}
+	if (options->server_alive_interval == -1)
+		options->server_alive_interval = 0;
 	if (options->server_alive_count_max == -1)
 		options->server_alive_count_max = 3;
 	if (options->control_master == -1)
 		options->control_master = 0;
+	if (options->control_persist == -1) {
+		options->control_persist = 0;
+		options->control_persist_timeout = 0;
+	}
 	if (options->hash_known_hosts == -1)
 		options->hash_known_hosts = 0;
 	if (options->tun_open == -1)

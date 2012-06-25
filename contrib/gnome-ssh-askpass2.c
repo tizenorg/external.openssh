@@ -120,6 +120,8 @@ passphrase_dialog(char *message)
 	g_signal_connect(G_OBJECT(entry), "activate",
 			 G_CALLBACK(ok_dialog), dialog);
 
+	gtk_window_set_keep_above(GTK_WINDOW(dialog), TRUE);
+
 	/* Grab focus */
 	gtk_widget_show_now(dialog);
 	if (grab_pointer) {
@@ -206,8 +208,6 @@ main(int argc, char **argv)
 	int result;
 
 	gtk_init(&argc, &argv);
-
-	gtk_window_set_default_icon_from_file ("/usr/share/pixmaps/ssh-askpass-gnome.png", NULL);
 
 	if (argc > 1) {
 		message = g_strjoinv(" ", argv + 1);

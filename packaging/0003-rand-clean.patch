@@ -1,0 +1,26 @@
+From ac0a156271e016ba740c4d2174f34b8824a32c5b Mon Sep 17 00:00:00 2001
+From: Anas Nashif <anas.nashif@intel.com>
+Date: Mon, 19 Dec 2011 11:31:03 +0000
+Subject: [PATCH 3/6] rand clean
+
+---
+ entropy.c |    3 +++
+ 1 files changed, 3 insertions(+), 0 deletions(-)
+
+diff --git a/entropy.c b/entropy.c
+index 8b70539..73c0457 100644
+--- a/entropy.c
++++ b/entropy.c
+@@ -159,6 +159,9 @@ init_rng(void)
+ 		fatal("OpenSSL version mismatch. Built against %lx, you "
+ 		    "have %lx", OPENSSL_VERSION_NUMBER, SSLeay());
+ 
++	/* clean the PRNG status when exiting the program */
++	atexit(RAND_cleanup);
++
+ #ifndef OPENSSL_PRNG_ONLY
+ 	original_uid = getuid();
+ 	original_euid = geteuid();
+-- 
+1.7.6.4
+

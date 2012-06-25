@@ -1,4 +1,4 @@
-/* $OpenBSD: kex.c,v 1.81 2009/05/27 06:34:36 andreas Exp $ */
+/* $OpenBSD: kex.c,v 1.82 2009/10/24 11:13:54 andreas Exp $ */
 /*
  * Copyright (c) 2000, 2001 Markus Friedl.  All rights reserved.
  *
@@ -48,10 +48,7 @@
 #include "match.h"
 #include "dispatch.h"
 #include "monitor.h"
-
-#ifdef GSSAPI
-#include "ssh-gss.h"
-#endif
+#include "roaming.h"
 
 #if OPENSSL_VERSION_NUMBER >= 0x00907000L
 # if defined(HAVE_EVP_SHA256)
@@ -329,20 +326,6 @@ choose_kex(Kex *k, char *client, char *server)
 		k->kex_type = KEX_DH_GEX_SHA256;
 		k->evp_md = evp_ssh_sha256();
 #endif
-#ifdef GSSAPI
-	} else if (strncmp(k->name, KEX_GSS_GEX_SHA1_ID,
-	    sizeof(KEX_GSS_GEX_SHA1_ID) - 1) == 0) {
-		k->kex_type = KEX_GSS_GEX_SHA1;
-		k->evp_md = EVP_sha1();
-	} else if (strncmp(k->name, KEX_GSS_GRP1_SHA1_ID,
-	    sizeof(KEX_GSS_GRP1_SHA1_ID) - 1) == 0) {
-		k->kex_type = KEX_GSS_GRP1_SHA1;
-		k->evp_md = EVP_sha1();
-	} else if (strncmp(k->name, KEX_GSS_GRP14_SHA1_ID,
-	    sizeof(KEX_GSS_GRP14_SHA1_ID) - 1) == 0) {
-		k->kex_type = KEX_GSS_GRP14_SHA1;
-		k->evp_md = EVP_sha1();
-#endif
 	} else
 		fatal("bad kex alg %s", k->name);
 }
@@ -402,6 +385,16 @@ kex_choose_conf(Kex *kex)
 	} else {
 		cprop=my;
 		sprop=peer;
+	}
+
+	/* Check whether server offers roaming */
+	if (!kex->server) {
+		char *roaming;
+		roaming = match_list(KEX_RESUME, peer[PROPOSAL_KEX_ALGS], NULL);
+		if (roaming) {
+			kex->roaming = 1;
+			xfree(roaming);
+		}
 	}
 
 	/* Algorithm Negotiation */

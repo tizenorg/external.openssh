@@ -1,0 +1,136 @@
+From 75ebc3c1868ef510feffa3eda3f0f6c229ea6e1b Mon Sep 17 00:00:00 2001
+From: Anas Nashif <anas.nashif@intel.com>
+Date: Mon, 19 Dec 2011 11:29:41 +0000
+Subject: [PATCH 2/6] log in chroot
+
+---
+ log.c     |   27 +++++++++++++++++++++++++++
+ log.h     |    5 +++++
+ session.c |    4 +++-
+ sshd.c    |    4 ++++
+ 4 files changed, 39 insertions(+), 1 deletions(-)
+
+diff --git a/log.c b/log.c
+index 4a8239b..c70729a 100644
+--- a/log.c
++++ b/log.c
+@@ -45,6 +45,7 @@
+ #include <syslog.h>
+ #include <unistd.h>
+ #include <errno.h>
++#include <fcntl.h>
+ #if defined(HAVE_STRNVIS) && defined(HAVE_VIS_H)
+ # include <vis.h>
+ #endif
+@@ -56,6 +57,7 @@ static LogLevel log_level = SYSLOG_LEVEL_INFO;
+ static int log_on_stderr = 1;
+ static int log_facility = LOG_AUTH;
+ static char *argv0;
++int log_fd_keep = 0;
+ 
+ extern char *__progname;
+ 
+@@ -310,6 +312,8 @@ log_init(char *av0, LogLevel level, SyslogFacility facility, int on_stderr)
+ 		exit(1);
+ 	}
+ 
++	if (log_fd_keep != 0)
++		return;
+ 	/*
+ 	 * If an external library (eg libwrap) attempts to use syslog
+ 	 * immediately after reexec, syslog may be pointing to the wrong
+@@ -392,10 +396,33 @@ do_log(LogLevel level, const char *fmt, va_list args)
+ 		syslog_r(pri, &sdata, "%.500s", fmtbuf);
+ 		closelog_r(&sdata);
+ #else
++	    if (!log_fd_keep) {
+ 		openlog(argv0 ? argv0 : __progname, LOG_PID, log_facility);
++	    }
+ 		syslog(pri, "%.500s", fmtbuf);
++	    if (!log_fd_keep) {
+ 		closelog();
++	    }
+ #endif
+ 	}
+ 	errno = saved_errno;
+ }
++
++void
++open_log(void)
++{
++	int temp1, temp2;
++
++	temp1 = open("/dev/null", O_RDONLY);
++	openlog(argv0 ? argv0 : __progname, LOG_PID|LOG_NDELAY, log_facility);
++	temp2 = open("/dev/null", O_RDONLY);
++	if (temp1 + 2 ==  temp2)
++		log_fd_keep = temp1 + 1;
++	else 
++		log_fd_keep = -1;
++
++	if (temp1 != -1)
++		close(temp1);
++	if (temp2 != -1)
++		close(temp2);
++}
+diff --git a/log.h b/log.h
+index 6505827..dd46f19 100644
+--- a/log.h
++++ b/log.h
+@@ -46,6 +46,9 @@ typedef enum {
+ 	SYSLOG_LEVEL_NOT_SET = -1
+ }       LogLevel;
+ 
++
++extern int log_fd_keep;
++
+ void     log_init(char *, LogLevel, SyslogFacility, int);
+ 
+ SyslogFacility	log_facility_number(char *);
+@@ -66,4 +69,6 @@ void     debug3(const char *, ...) __attribute__((format(printf, 1, 2)));
+ 
+ void	 do_log(LogLevel, const char *, va_list);
+ void	 cleanup_exit(int) __attribute__((noreturn));
++
++void     open_log(void);
+ #endif
+diff --git a/session.c b/session.c
+index 71e4fbe..f1c8838 100644
+--- a/session.c
++++ b/session.c
+@@ -1455,6 +1455,7 @@ safely_chroot(const char *path, uid_t uid)
+ 	if (chdir(path) == -1)
+ 		fatal("Unable to chdir to chroot path \"%s\": "
+ 		    "%s", path, strerror(errno));
++	open_log ();
+ 	if (chroot(path) == -1)
+ 		fatal("chroot(\"%s\"): %s", path, strerror(errno));
+ 	if (chdir("/") == -1)
+@@ -1656,7 +1657,8 @@ child_close_fds(void)
+ 	 * descriptors open.
+ 	 */
+ 	for (i = 3; i < 64; i++)
+-		close(i);
++		if (i != log_fd_keep)
++			close(i);
+ }
+ 
+ /*
+diff --git a/sshd.c b/sshd.c
+index a7d3ee5..1e7f198 100644
+--- a/sshd.c
++++ b/sshd.c
+@@ -598,6 +598,10 @@ privsep_preauth_child(void)
+ 	/* Demote the private keys to public keys. */
+ 	demote_sensitive_data();
+ 
++	/* Open the syslog permanently so the chrooted process still
++	   can write to syslog. */
++	open_log();
++	
+ 	/* Change our root directory */
+ 	if (chroot(_PATH_PRIVSEP_CHROOT_DIR) == -1)
+ 		fatal("chroot(\"%s\"): %s", _PATH_PRIVSEP_CHROOT_DIR,
+-- 
+1.7.6.4
+

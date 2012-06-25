@@ -69,7 +69,6 @@ extern Authmethod method_passwd;
 extern Authmethod method_kbdint;
 extern Authmethod method_hostbased;
 #ifdef GSSAPI
-extern Authmethod method_gsskeyex;
 extern Authmethod method_gssapi;
 #endif
 #ifdef JPAKE
@@ -80,7 +79,6 @@ Authmethod *authmethods[] = {
 	&method_none,
 	&method_pubkey,
 #ifdef GSSAPI
-	&method_gsskeyex,
 	&method_gssapi,
 #endif
 #ifdef JPAKE
@@ -217,7 +215,7 @@ input_userauth_request(int type, u_int32_t seq, void *ctxt)
 {
 	Authctxt *authctxt = ctxt;
 	Authmethod *m = NULL;
-	char *user, *service, *method, *style = NULL, *role = NULL;
+	char *user, *service, *method, *style = NULL;
 	int authenticated = 0;
 
 	if (authctxt == NULL)
@@ -229,13 +227,8 @@ input_userauth_request(int type, u_int32_t seq, void *ctxt)
 	debug("userauth-request for user %s service %s method %s", user, service, method);
 	debug("attempt %d failures %d", authctxt->attempt, authctxt->failures);
 
-	if ((role = strchr(user, '/')) != NULL)
-		*role++ = 0;
-
 	if ((style = strchr(user, ':')) != NULL)
 		*style++ = 0;
-	else if (role && (style = strchr(role, ':')) != NULL)
-		*style++ = '\0';
 
 	if (authctxt->attempt++ == 0) {
 		/* setup auth context */
@@ -259,9 +252,8 @@ input_userauth_request(int type, u_int32_t seq, void *ctxt)
 		    use_privsep ? " [net]" : "");
 		authctxt->service = xstrdup(service);
 		authctxt->style = style ? xstrdup(style) : NULL;
-		authctxt->role = role ? xstrdup(role) : NULL;
 		if (use_privsep)
-			mm_inform_authserv(service, style, role);
+			mm_inform_authserv(service, style);
 		userauth_banner();
 	} else if (strcmp(user, authctxt->user) != 0 ||
 	    strcmp(service, authctxt->service) != 0) {
@@ -282,7 +274,6 @@ input_userauth_request(int type, u_int32_t seq, void *ctxt)
 #endif
 
 	authctxt->postponed = 0;
-	authctxt->server_caused_failure = 0;
 
 	/* try to authenticate user */
 	m = authmethod_lookup(method);
@@ -355,8 +346,7 @@ userauth_finish(Authctxt *authctxt, int authenticated, char *method)
 	} else {
 
 		/* Allow initial try of "none" auth without failure penalty */
-		if (!authctxt->server_caused_failure &&
-		    (authctxt->attempt > 1 || strcmp(method, "none") != 0))
+		if (authctxt->attempt > 1 || strcmp(method, "none") != 0)
 			authctxt->failures++;
 		if (authctxt->failures >= options.max_authtries) {
 #ifdef SSH_AUDIT_EVENTS

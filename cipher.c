@@ -50,6 +50,8 @@
 
 /* compatibility with old or broken OpenSSL versions */
 #include "openbsd-compat/openssl-compat.h"
+#undef USE_CIPHER_ACSS
+#define EVP_acss NULL
 
 extern const EVP_CIPHER *evp_ssh1_bf(void);
 extern const EVP_CIPHER *evp_ssh1_3des(void);

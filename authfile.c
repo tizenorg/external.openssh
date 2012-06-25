@@ -1,4 +1,4 @@
-/* $OpenBSD: authfile.c,v 1.76 2006/08/03 03:34:41 deraadt Exp $ */
+/* $OpenBSD: authfile.c,v 1.82 2010/08/04 05:49:22 djm Exp $ */
 /*
  * Author: Tatu Ylonen <ylo@cs.hut.fi>
  * Copyright (c) 1995 Tatu Ylonen <ylo@cs.hut.fi>, Espoo, Finland
@@ -47,6 +47,9 @@
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 
+/* compatibility with old or broken OpenSSL versions */
+#include "openbsd-compat/openssl-compat.h"
+
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
@@ -65,7 +68,6 @@
 #include "rsa.h"
 #include "misc.h"
 #include "atomicio.h"
-#include "pathnames.h"
 
 /* Version identification string for SSH v1 identity files. */
 static const char authfile_id_string[] =
@@ -185,7 +187,11 @@ key_save_private_pem(Key *key, const char *filename, const char *_passphrase,
 	int success = 0;
 	int len = strlen(_passphrase);
 	u_char *passphrase = (len > 0) ? (u_char *)_passphrase : NULL;
+#if (OPENSSL_VERSION_NUMBER < 0x00907000L)
 	const EVP_CIPHER *cipher = (len > 0) ? EVP_des_ede3_cbc() : NULL;
+#else
+	const EVP_CIPHER *cipher = (len > 0) ? EVP_aes_128_cbc() : NULL;
+#endif
 
 	if (len > 0 && len <= 4) {
 		error("passphrase too short: have %d bytes, need > 4", len);
@@ -553,8 +559,13 @@ key_load_private_type(int type, const char *filename, const char *passphrase,
 	int fd;
 
 	fd = open(filename, O_RDONLY);
-	if (fd < 0)
+	if (fd < 0) {
+		debug("could not open key file '%s': %s", filename,
+		    strerror(errno));
+		if (perm_ok != NULL)
+			*perm_ok = 0;
 		return NULL;
+	}
 	if (!key_perm_ok(fd, filename)) {
 		if (perm_ok != NULL)
 			*perm_ok = 0;
@@ -589,8 +600,11 @@ key_load_private(const char *filename, const char *passphrase,
 	int fd;
 
 	fd = open(filename, O_RDONLY);
-	if (fd < 0)
+	if (fd < 0) {
+		debug("could not open key file '%s': %s", filename,
+		    strerror(errno));
 		return NULL;
+	}
 	if (!key_perm_ok(fd, filename)) {
 		error("bad permissions: ignore key: %s", filename);
 		close(fd);
@@ -679,139 +693,124 @@ key_load_public(const char *filename, char **commentp)
 	return NULL;
 }
 
-/* Scan a blacklist of known-vulnerable keys in blacklist_file. */
-static int
-blacklisted_key_in_file(const Key *key, const char *blacklist_file, char **fp)
+/* Load the certificate associated with the named private key */
+Key *
+key_load_cert(const char *filename)
 {
-	int fd = -1;
-	char *dgst_hex = NULL;
-	char *dgst_packed = NULL, *p;
-	int i;
-	size_t line_len;
-	struct stat st;
-	char buf[256];
-	off_t start, lower, upper;
-	int ret = 0;
+	Key *pub;
+	char *file;
 
-	debug("Checking blacklist file %s", blacklist_file);
-	fd = open(blacklist_file, O_RDONLY);
-	if (fd < 0) {
-		ret = -1;
-		goto out;
+	pub = key_new(KEY_UNSPEC);
+	xasprintf(&file, "%s-cert.pub", filename);
+	if (key_try_load_public(pub, file, NULL) == 1) {
+		xfree(file);
+		return pub;
+	}
+	xfree(file);
+	key_free(pub);
+	return NULL;
+}
+
+/* Load private key and certificate */
+Key *
+key_load_private_cert(int type, const char *filename, const char *passphrase,
+    int *perm_ok)
+{
+	Key *key, *pub;
+
+	switch (type) {
+	case KEY_RSA:
+	case KEY_DSA:
+		break;
+	default:
+		error("%s: unsupported key type", __func__);
+		return NULL;
 	}
 
-	dgst_hex = key_fingerprint(key, SSH_FP_MD5, SSH_FP_HEX);
-	/* Remove all colons */
-	dgst_packed = xcalloc(1, strlen(dgst_hex) + 1);
-	for (i = 0, p = dgst_packed; dgst_hex[i]; i++)
-		if (dgst_hex[i] != ':')
-			*p++ = dgst_hex[i];
-	/* Only compare least-significant 80 bits (to keep the blacklist
-	 * size down)
-	 */
-	line_len = strlen(dgst_packed + 12);
-	if (line_len > 32)
-		goto out;
+	if ((key = key_load_private_type(type, filename, 
+	    passphrase, NULL, perm_ok)) == NULL)
+		return NULL;
 
-	/* Skip leading comments */
-	start = 0;
-	for (;;) {
-		ssize_t r;
-		char *newline;
-
-		r = atomicio(read, fd, buf, sizeof(buf));
-		if (r <= 0)
-			goto out;
-		if (buf[0] != '#')
-			break;
-
-		newline = memchr(buf, '\n', sizeof(buf));
-		if (!newline)
-			goto out;
-		start += newline + 1 - buf;
-		if (lseek(fd, start, SEEK_SET) < 0)
-			goto out;
+	if ((pub = key_load_cert(filename)) == NULL) {
+		key_free(key);
+		return NULL;
 	}
 
-	/* Initialise binary search record numbers */
-	if (fstat(fd, &st) < 0)
-		goto out;
-	lower = 0;
-	upper = (st.st_size - start) / (line_len + 1);
-
-	while (lower != upper) {
-		off_t cur;
-		int cmp;
-
-		cur = lower + (upper - lower) / 2;
-
-		/* Read this line and compare to digest; this is
-		 * overflow-safe since cur < max(off_t) / (line_len + 1) */
-		if (lseek(fd, start + cur * (line_len + 1), SEEK_SET) < 0)
-			break;
-		if (atomicio(read, fd, buf, line_len) != line_len)
-			break;
-		cmp = memcmp(buf, dgst_packed + 12, line_len);
-		if (cmp < 0) {
-			if (cur == lower)
-				break;
-			lower = cur;
-		} else if (cmp > 0) {
-			if (cur == upper)
-				break;
-			upper = cur;
-		} else {
-			debug("Found %s in blacklist", dgst_hex);
-			ret = 1;
-			break;
-		}
+	/* Make sure the private key matches the certificate */
+	if (key_equal_public(key, pub) == 0) {
+		error("%s: certificate does not match private key %s",
+		    __func__, filename);
+	} else if (key_to_certified(key, key_cert_is_legacy(pub)) != 0) {
+		error("%s: key_to_certified failed", __func__);
+	} else {
+		key_cert_copy(pub, key);
+		key_free(pub);
+		return key;
 	}
 
-out:
-	if (dgst_packed)
-		xfree(dgst_packed);
-	if (ret != 1 && dgst_hex) {
-		xfree(dgst_hex);
-		dgst_hex = NULL;
-	}
-	if (fp)
-		*fp = dgst_hex;
-	if (fd >= 0)
-		close(fd);
-	return ret;
+	key_free(key);
+	key_free(pub);
+	return NULL;
 }
 
 /*
- * Scan blacklists of known-vulnerable keys. If a vulnerable key is found,
- * its fingerprint is returned in *fp, unless fp is NULL.
+ * Returns 1 if the specified "key" is listed in the file "filename",
+ * 0 if the key is not listed or -1 on error.
+ * If strict_type is set then the key type must match exactly,
+ * otherwise a comparison that ignores certficiate data is performed.
  */
 int
-blacklisted_key(const Key *key, char **fp)
+key_in_file(Key *key, const char *filename, int strict_type)
 {
-	Key *public;
-	char *blacklist_file;
-	int ret, ret2;
+	FILE *f;
+	char line[SSH_MAX_PUBKEY_BYTES];
+	char *cp;
+	u_long linenum = 0;
+	int ret = 0;
+	Key *pub;
+	int (*key_compare)(const Key *, const Key *) = strict_type ?
+	    key_equal : key_equal_public;
 
-	public = key_demote(key);
-	if (public->type == KEY_RSA1)
-		public->type = KEY_RSA;
-
-	xasprintf(&blacklist_file, "%s.%s-%u",
-	    _PATH_BLACKLIST, key_type(public), key_size(public));
-	ret = blacklisted_key_in_file(public, blacklist_file, fp);
-	xfree(blacklist_file);
-	if (ret > 0) {
-		key_free(public);
-		return ret;
+	if ((f = fopen(filename, "r")) == NULL) {
+		if (errno == ENOENT) {
+			debug("%s: keyfile \"%s\" missing", __func__, filename);
+			return 0;
+		} else {
+			error("%s: could not open keyfile \"%s\": %s", __func__,
+			    filename, strerror(errno));
+			return -1;
+		}
 	}
 
-	xasprintf(&blacklist_file, "%s.%s-%u",
-	    _PATH_BLACKLIST_CONFIG, key_type(public), key_size(public));
-	ret2 = blacklisted_key_in_file(public, blacklist_file, fp);
-	xfree(blacklist_file);
-	if (ret2 > ret)
-		ret = ret2;
+	while (read_keyfile_line(f, filename, line, sizeof(line),
+		    &linenum) != -1) {
+		cp = line;
 
-	key_free(public);
+		/* Skip leading whitespace. */
+		for (; *cp && (*cp == ' ' || *cp == '\t'); cp++)
+			;
+
+		/* Skip comments and empty lines */
+		switch (*cp) {
+		case '#':
+		case '\n':
+		case '\0':
+			continue;
+		}
+
+		pub = key_new(KEY_UNSPEC);
+		if (key_read(pub, &cp) != 1) {
+			key_free(pub);
+			continue;
+		}
+		if (key_compare(key, pub)) {
+			ret = 1;
+			key_free(pub);
+			break;
+		}
+		key_free(pub);
+	}
+	fclose(f);
 	return ret;
 }
+
