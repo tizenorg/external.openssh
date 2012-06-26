@@ -44,7 +44,7 @@ Requires:       openssh = %{version}
 Summary:        The OpenSSH server daemon
 Group:          System/Daemons
 Requires:       openssh = %{version}
-Requires(pre): /usr/sbin/useradd
+#Requires(pre): /usr/sbin/useradd
 
 
 %description
@@ -141,9 +141,9 @@ if [ "$1" != 0 -a -r /var/run/sshd.pid ] ; then
 	touch /var/run/sshd.restart
 fi
 
-%pre server
-/usr/sbin/useradd -c "Privilege-separated SSH" -u %{sshd_uid} \
-	-s /bin/false -r -d /var/empty/sshd sshd 2> /dev/null || :
+#%pre server
+#/usr/sbin/useradd -c "Privilege-separated SSH" -u %{sshd_uid} \
+#	-s /bin/false -r -d /var/empty/sshd sshd 2> /dev/null || :
 
 
 
