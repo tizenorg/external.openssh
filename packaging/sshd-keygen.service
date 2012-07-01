@@ -1,0 +1,10 @@
+[Unit]
+Description=SSH server keys generation.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/sshd-keygen
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

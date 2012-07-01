@@ -10,8 +10,8 @@ Source1:        openssh-nukeacss.sh
 Source4:        sshd.service
 Source5:        sshd@.service
 Source6:        sshd.socket
-Source7:        sshd-keys.service
-Source8:        sshd-hostkeys
+Source7:        sshd-keygen.service
+Source8:        sshd-keygen
 Source1001:     openssh.manifest
 
 Patch0:         0001-customize-configuration.patch
@@ -44,7 +44,6 @@ Requires:       openssh = %{version}
 Summary:        The OpenSSH server daemon
 Group:          System/Daemons
 Requires:       openssh = %{version}
-#Requires(pre): /usr/sbin/useradd
 
 
 %description
@@ -120,31 +119,45 @@ install -d %{buildroot}%{_libexecdir}/openssh
 install -m755 contrib/ssh-copy-id %{buildroot}%{_bindir}/
 
 # systemd integration
-install -D -m 0644 %{SOURCE4} %{buildroot}/%{_lib}/systemd/system/sshd.service
-install -D -m 0644 %{SOURCE5} %{buildroot}/%{_lib}/systemd/system/sshd@.service
-install -D -m 0644 %{SOURCE6} %{buildroot}/%{_lib}/systemd/system/sshd.socket
-install -D -m 0644 %{SOURCE7} %{buildroot}/%{_lib}/systemd/system/sshd-keys.service
-mkdir -p %{buildroot}/%{_lib}/systemd/system/multi-user.target.wants
-ln -s ../sshd.socket %{buildroot}/%{_lib}/systemd/system/multi-user.target.wants/sshd.socket
-install -D -m 0755 %{SOURCE8} %{buildroot}%{_sbindir}/sshd-hostkeys
-mkdir -p %{buildroot}/%{_lib}/systemd/system/multi-user.target.wants
-ln -s ../sshd-keys.service %{buildroot}/%{_lib}/systemd/system/multi-user.target.wants/sshd-keys.service
+install -D -m 0644 %{SOURCE4} %{buildroot}/%{_libdir}/systemd/system/sshd.service
+install -D -m 0644 %{SOURCE5} %{buildroot}/%{_libdir}/systemd/system/sshd@.service
+install -D -m 0644 %{SOURCE6} %{buildroot}/%{_libdir}/systemd/system/sshd.socket
+install -D -m 0644 %{SOURCE7} %{buildroot}/%{_libdir}/systemd/system/sshd-keygen.service
+mkdir -p %{buildroot}/%{_libdir}/systemd/system/multi-user.target.wants
+ln -s ../sshd.socket %{buildroot}/%{_libdir}/systemd/system/multi-user.target.wants/sshd.socket
+install -D -m 0755 %{SOURCE8} %{buildroot}%{_sbindir}/sshd-keygen
+mkdir -p %{buildroot}/%{_libdir}/systemd/system/multi-user.target.wants
+ln -s ../sshd-keygen.service %{buildroot}/%{_libdir}/systemd/system/multi-user.target.wants/sshd-keygen.service
 
 rm -f %{buildroot}%{_sysconfdir}/profile.d/gnome-ssh-askpass.*
+
+mkdir -p %{buildroot}/var/empty/sshd
 
 %remove_docs
 
 rm -rf %{buildroot}%{_datadir}/man
 
-%triggerun server -- ssh-server
-if [ "$1" != 0 -a -r /var/run/sshd.pid ] ; then
-	touch /var/run/sshd.restart
+
+%post server
+if [ $1 -eq 1 ] ; then
+    /usr/bin/systemctl daemon-reload >/dev/null 2>&1 || :
+    /usr//bin/systemctl enable sshd.service >/dev/null 2>&1 || :
+    /usr//bin/systemctl enable sshd-keygen.service >/dev/null 2>&1 || :
 fi
 
-#%pre server
-#/usr/sbin/useradd -c "Privilege-separated SSH" -u %{sshd_uid} \
-#	-s /bin/false -r -d /var/empty/sshd sshd 2> /dev/null || :
+%postun server
+/usr/bin/systemctl daemon-reload >/dev/null 2>&1 || :
+if [ $1 -ge 1 ] ; then
+    # Package upgrade, not uninstall
+    /usr//bin/systemctl try-restart sshd.service >/dev/null 2>&1 || :
+fi
 
+%preun server
+if [ $1 -eq 0 ] ; then
+    # Package removal, not upgrade
+    /usr/bin/systemctl --no-reload disable sshd.service > /dev/null 2>&1 || :
+    /usr//bin/systemctl stop sshd.service > /dev/null 2>&1 || :
+fi
 
 
 %files
@@ -172,14 +185,15 @@ fi
 %files server
 %manifest openssh.manifest
 %dir %attr(0711,root,root)
+%attr(0750,root,root) /var/empty/sshd
 %attr(0755,root,root) %{_sbindir}/sshd
 %attr(0755,root,root) %{_libexecdir}/openssh/sftp-server
 %attr(0600,root,root) %config(noreplace) %{_sysconfdir}/ssh/sshd_config
-/%{_lib}/systemd/system/sshd.service
-/%{_lib}/systemd/system/sshd.socket
-/%{_lib}/systemd/system/sshd@.service
-/%{_lib}/systemd/system/sshd-keys.service
-/%{_lib}/systemd/system/multi-user.target.wants/sshd.socket
-/%{_lib}/systemd/system/multi-user.target.wants/sshd-keys.service
-%{_sbindir}/sshd-hostkeys
+%{_libdir}/systemd/system/sshd.service
+%{_libdir}/systemd/system/sshd.socket
+%{_libdir}/systemd/system/sshd@.service
+%{_libdir}/systemd/system/sshd-keygen.service
+%{_libdir}/systemd/system/multi-user.target.wants/sshd.socket
+%{_libdir}/systemd/system/multi-user.target.wants/sshd-keygen.service
+%{_sbindir}/sshd-keygen
 

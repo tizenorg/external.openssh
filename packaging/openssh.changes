@@ -1,22 +1,28 @@
-* Tue Jun 26 2012 Prajwal Mohan <prajwal.karur.mohan@intel.com>
-- Removing the dependency on useradd temporarily 
+* Mon Jul 02 2012 Anas Nashif <anas.nashif@intel.com> 20120626.1@6949823
+- add privillage seperation directory files
 
-* Mon Jun 25 2012 Anas Nashif <anas.nashif@intel.com> 5ce6cbf
+* Sun Jul 01 2012 Anas Nashif <anas.nashif@intel.com> 20120626.1@896f8b7
+- install systemd files in %_libdir
+
+* Tue Jun 26 2012 Prajwal Mohan <prajwal.karur.mohan@intel.com> 20120626.1@93c05e9
+- Removing the dependency on useradd temporarily
+
+* Mon Jun 25 2012 Anas Nashif <anas.nashif@intel.com> 20120626.1@4bfbbe3
 - Update to 5.6p1
 
-* Tue Jun 12 2012 Chengwei Yang <chengwei.yang@intel.com> c930434
+* Tue Jun 12 2012 Chengwei Yang <chengwei.yang@intel.com> 20120626.1@c930434
 - fix build failure
 
-* Fri Jun 01 2012 Anas Nashif <anas.nashif@intel.com> e43f12c
+* Fri Jun 01 2012 Anas Nashif <anas.nashif@intel.com> 20120626.1@e43f12c
 - DO NOT create host keys in %post
 
-* Wed May 30 2012 Ryan Ware <ryan.r.ware@intel.com> 3a23953
+* Wed May 30 2012 Ryan Ware <ryan.r.ware@intel.com> 20120626.1@3a23953
 - Add default Smack manifest for openssh.spec
 
-* Sun Apr 29 2012 Kim Kibum <kb0929.kim@samsung.com> 9d488d7
+* Sun Apr 29 2012 Kim Kibum <kb0929.kim@samsung.com> 20120626.1@9d488d7
 - upload tizen1.0 source
 
-* Fri Jan 06 2012 Kibum Kim <kb0929.kim@samsung.com> 5c170d0
+* Fri Jan 06 2012 Kibum Kim <kb0929.kim@samsung.com> 20120626.1@5c170d0
 - Git init
 [ Eunkyoung Kim ]
 - Initial empty repository

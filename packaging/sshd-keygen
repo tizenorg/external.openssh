@@ -5,8 +5,8 @@ make_key()
 	if [ ! -f /etc/ssh/$1 ]; then
 		echo "Generating $2 key: /etc/ssh/$1"
 		ssh-keygen -q -t $2 -N '' -f /etc/ssh/$1
-		chmod 600 /etc/ssh/$1
-		chmod 644 /etc/ssh/$1.pub
+		/bin/chmod 600 /etc/ssh/$1
+		/bin/chmod 644 /etc/ssh/$1.pub
 	fi
 }
 
