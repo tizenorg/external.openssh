@@ -12,6 +12,7 @@ Source5:        sshd@.service
 Source6:        sshd.socket
 Source7:        sshd-keygen.service
 Source8:        sshd-keygen
+Source9:        sshd.pam
 Source1001:     openssh.manifest
 
 Patch0:         0001-customize-configuration.patch
@@ -34,6 +35,8 @@ BuildRequires:  xauth
 BuildRequires:  zlib-devel
 BuildRequires:  pkgconfig(ncurses)
 BuildRequires:  pkgconfig(openssl)
+BuildRequires:  pam-devel
+
 
 %package clients
 Summary:        The OpenSSH client applications
@@ -103,6 +106,7 @@ LDFLAGS="$LDFLAGS -pie"; export LDFLAGS
 	--disable-strip \
 	--without-zlib-version-check \
 	--with-nss \
+        --with-pam \
     	--without-kerberos5
 
 make
@@ -132,6 +136,9 @@ ln -s ../sshd-keygen.service %{buildroot}/%{_libdir}/systemd/system/multi-user.t
 rm -f %{buildroot}%{_sysconfdir}/profile.d/gnome-ssh-askpass.*
 
 mkdir -p %{buildroot}/var/empty/sshd
+
+install -d %{buildroot}%{_sysconfdir}/pam.d/
+install -m644 %{SOURCE9} %{buildroot}%{_sysconfdir}/pam.d/sshd
 
 %remove_docs
 
@@ -196,4 +203,4 @@ fi
 %{_libdir}/systemd/system/multi-user.target.wants/sshd.socket
 %{_libdir}/systemd/system/multi-user.target.wants/sshd-keygen.service
 %{_sbindir}/sshd-keygen
-
+%{_sysconfdir}/pam.d/sshd
