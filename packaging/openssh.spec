@@ -127,8 +127,8 @@ install -D -m 0644 %{SOURCE4} %{buildroot}/%{_libdir}/systemd/system/sshd.servic
 install -D -m 0644 %{SOURCE5} %{buildroot}/%{_libdir}/systemd/system/sshd@.service
 install -D -m 0644 %{SOURCE6} %{buildroot}/%{_libdir}/systemd/system/sshd.socket
 install -D -m 0644 %{SOURCE7} %{buildroot}/%{_libdir}/systemd/system/sshd-keygen.service
-mkdir -p %{buildroot}/%{_libdir}/systemd/system/multi-user.target.wants
-ln -s ../sshd.socket %{buildroot}/%{_libdir}/systemd/system/multi-user.target.wants/sshd.socket
+mkdir -p %{buildroot}/%{_libdir}/systemd/system/basic.target.wants
+ln -s ../sshd.socket %{buildroot}/%{_libdir}/systemd/system/basic.target.wants/sshd.socket
 install -D -m 0755 %{SOURCE8} %{buildroot}%{_sbindir}/sshd-keygen
 mkdir -p %{buildroot}/%{_libdir}/systemd/system/multi-user.target.wants
 ln -s ../sshd-keygen.service %{buildroot}/%{_libdir}/systemd/system/multi-user.target.wants/sshd-keygen.service
@@ -200,7 +200,7 @@ fi
 %{_libdir}/systemd/system/sshd.socket
 %{_libdir}/systemd/system/sshd@.service
 %{_libdir}/systemd/system/sshd-keygen.service
-%{_libdir}/systemd/system/multi-user.target.wants/sshd.socket
+%{_libdir}/systemd/system/basic.target.wants/sshd.socket
 %{_libdir}/systemd/system/multi-user.target.wants/sshd-keygen.service
 %{_sbindir}/sshd-keygen
 %{_sysconfdir}/pam.d/sshd
