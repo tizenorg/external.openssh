@@ -1,3 +1,6 @@
+* Wed Jul 11 2012 Yin Kangkai <kangkai.yin@intel.com> 20120626.1@8996d03
+- permit empty passwd login
+
 * Mon Jul 09 2012 William Douglas <william.douglas@intel.com> 20120626.1@8996d03
 - Move sshd.socket unit file link to basic.target.wants
 
