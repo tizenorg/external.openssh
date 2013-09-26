@@ -114,6 +114,9 @@ ln -s ../../init.d/ssh %{buildroot}/etc/rc.d/init.d/opensshd
 
 install -m 600 %{_sourcedir}/sshd_config %{buildroot}/etc/ssh/sshd_config
 
+mkdir -p %{buildroot}/usr/share/license
+cp LICENCE %{buildroot}/usr/share/license/%{name}
+
 
 %remove_docs
 
@@ -180,4 +183,5 @@ create_keys
 /etc/ssh/sshd_config
 %{_libdir}/openssh/sftp-server
 %{_prefix}/sbin/sshd
+/usr/share/license/%{name}
 
