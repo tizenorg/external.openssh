@@ -1,0 +1,10 @@
+[Unit]
+Description=Making /var/run/sshd
+ConditionPathExists=!/var/run/sshd
+
+[Service]
+Type=oneshot
+ExecStart=-/bin/mkdir -m 0755 /var/run/sshd
+
+[Install]
+WantedBy=multi-user.target

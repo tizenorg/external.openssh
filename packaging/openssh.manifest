@@ -1,0 +1,10 @@
+<manifest>
+  <request>
+    <domain name="_"/>
+  </request>
+  <assign>
+    <filesystem path="/usr/bin/*" exec_label="none" />
+    <filesystem path="/usr/sbin/*" exec_label="none" />
+    <filesystem path="/etc/network/if-up.d/openssh-server" exec_label="none" />
+  </assign>
+</manifest>

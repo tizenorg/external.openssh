@@ -1,0 +1,15 @@
+[Unit]
+Description=OpenSSH Daemon
+Wants=sshd-pre.service
+After=sshd-pre.service
+
+[Service]
+Type=forking
+PIDFile=/var/run/sshd.pid
+ExecStart=/usr/sbin/sshd
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=process
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
